@@ -1,604 +1,146 @@
-# KSOPS - A Flexible Kustomize Plugin for SOPS Encrypted Resources
+# ksops-image
 
-![Tests and Build](https://github.com/viaduct-ai/kustomize-sops/workflows/Run%20Tests%20and%20Build/badge.svg?branch=master)
+An **unofficial rebuild** of [KSOPS](https://github.com/viaduct-ai/kustomize-sops)
+(viaduct-ai/kustomize-sops) v4.5.1, published as `ghcr.io/howell-technology/ksops`.
+Howell Technology maintains it for its own Argo CD clusters. It is the upstream
+v4.5.1 code, rebuilt with current Go and patched Go dependencies.
 
-- [Background](#background)
-- [Overview](#overview)
-- [Requirements](#requirements)
-- [Installation Options](#installation-options)
-- [Getting Started](#getting-started-tutorial)
-- [Configuration](#configuration)
-- [Generator Options](#generator-options)
-- [Development and Testing](#development-and-testing)
-- [Legacy Exec Plugin](#legacy-exec-plugin)
-- [Argo CD Integration 🤖](#argo-cd-integration-)
+> **Not affiliated with Viaduct.** The image may be removed once upstream
+> ships a release with fixed dependencies. If you use it, pin it by digest and
+> watch upstream.
 
-## Background
+## Why this exists
 
-At [Viaduct](https://www.viaduct.ai/), we manage our Kubernetes resources via the [GitOps](https://www.weave.works/blog/gitops-operations-by-pull-request) pattern; however, we could not find a solution compatible with our stack for managing secrets via the GitOps paradigm. We built `KSOPS` to connect [kustomize](https://github.com/kubernetes-sigs/kustomize/) to [SOPS](https://github.com/mozilla/sops) and integrated it with [Argo CD](https://github.com/argoproj/argo-cd) to safely manage our secrets the same way we manage the rest our Kubernetes manifest.
+KSOPS v4.5.1 (April 2026) is the latest upstream release, and nothing has been
+merged upstream since. Its binary is built with Go 1.25.0 and older libraries
+that have known vulnerabilities. That includes a critical one in
+`golang.org/x/crypto` (CVE-2026-46595) and several in `x/net`, `x/text`,
+`grpc` and the Go standard library. In Argo CD, the ksops binary runs in the
+repo-server next to the SOPS key that decrypts every secret, so it should not
+carry known holes.
 
-## Overview
+Upstream's Dependabot PRs ([#341](https://github.com/viaduct-ai/kustomize-sops/pull/341),
+[#339](https://github.com/viaduct-ai/kustomize-sops/pull/339)) have been open
+since July 2026 and only cover part of this.
 
-`KSOPS`, or kustomize-SOPS, is a [kustomize](https://github.com/kubernetes-sigs/kustomize/) [KRM exec plugin](https://kubectl.docs.kubernetes.io/guides/extending_kustomize/exec_krm_functions/) for SOPS encrypted resources. `KSOPS` can be used to decrypt any Kubernetes resource, but is most commonly used to decrypt encrypted Kubernetes Secrets and ConfigMaps. As a [kustomize](https://github.com/kubernetes-sigs/kustomize/) plugin, `KSOPS` allows you to manage, build, and apply encrypted manifests the same way you manage the rest of your Kubernetes manifests.
+## What changed from upstream v4.5.1
 
-## Requirements
+No ksops source code is changed. Only the build inputs are:
 
-- [kustomize](https://github.com/kubernetes-sigs/kustomize/)
+| | Upstream v4.5.1 | This rebuild |
+|---|---|---|
+| Go toolchain | 1.25.0 | 1.26.11 |
+| `golang.org/x/crypto` | 0.48.0 | 0.59.0 |
+| `golang.org/x/net` | 0.50.0 | 0.63.0 |
+| `golang.org/x/text` | 0.34.0 | 0.44.0 |
+| `google.golang.org/grpc` | 1.79.3 | 1.85.0 |
+| `go.opentelemetry.io/otel` | 1.45.0 | 1.47.0 |
+| `go.mongodb.org/mongo-driver` | 1.13.1 | 1.17.7 |
+| `github.com/getsops/sops/v3` | 3.12.2 | **3.12.2 (unchanged, on purpose)** |
+| govulncheck | 12+ reachable vulnerabilities | none |
 
-## Installation
+**Why sops stays on 3.12.2:** sops 3.13 changed how YAML comments are
+handled, and 3.13.2 shipped a bug that broke the integrity check (MAC) when
+decrypting lists that contain comments. That bug was fixed in 3.13.3. This
+rebuild exists only to close vulnerabilities, so it does not change how
+secrets are decrypted. Dependabot is told to skip sops minor versions.
 
-### Install the Latest Release
+### Files changed (Apache-2.0 §4(b) notice)
 
-Using curl
+- `go.mod`, `go.sum`: the dependency versions above.
+- `Dockerfile`: replaced. The upstream one is kept as `Dockerfile.upstream`.
+  The image now contains only the ksops binary, on `gcr.io/distroless/static:nonroot`.
+  It has no kustomize, git or shell. Every base image is pinned by digest.
+- `.github/`: upstream's release, CodeQL and Go workflows are removed, and
+  replaced with `build.yml` and a new Dependabot config.
+- `README.md`: this file. The upstream README is kept as `README-upstream.md`.
 
-```bash
-curl -s https://raw.githubusercontent.com/viaduct-ai/kustomize-sops/master/scripts/install-ksops-archive.sh | bash
+## Image
+
+```
+ghcr.io/howell-technology/ksops:<tag>@sha256:<digest>
 ```
 
-Or using wget
+- **Platforms:** `linux/amd64`, `linux/arm64`.
+- **Tags:**
+  - `v4.5.1-ht.N`: releases. `N` goes up with each rebuild of the same upstream version.
+  - `main`, `sha-<short>`: builds from `main`.
+- **Binary:** `/usr/local/bin/ksops`, the same path as upstream (also `kustomize-sops`).
+- **Supply chain:** each image carries an SBOM and SLSA provenance, generated
+  by `docker/build-push-action`.
 
-```bash
-wget -qcO - https://raw.githubusercontent.com/viaduct-ai/kustomize-sops/master/scripts/install-ksops-archive.sh | bash
-```
+**Always pin by digest.** Tags are only labels.
 
-If you receive a `Permission denied` error, try running the command with `sudo`
+### Argo CD repo-server (exec plugin via `ksops install`)
 
-```bash
-wget -qcO - https://raw.githubusercontent.com/viaduct-ai/kustomize-sops/master/scripts/install-ksops-archive.sh | sudo bash
-```
-
-### Install from Source
-
-_Note:_ Installing from source requires Go
-
-```bash
-# Optionally, install kustomize via
-# make kustomize
-# Verify the $GOPATH environment variable exists
-make install
-```
-
-## Getting Started (Tutorial)
-
-### 0. Verify Requirements
-
-Before continuing, verify your installation of [kustomize](https://github.com/kubernetes-sigs/kustomize/)
-and `gpg`. Below are a few non-comprehensive commands to quickly check your installations:
-
-```bash
-# Verify kustomize is installed
-kustomize version
-
-# Verify gpg is installed
-gpg --help
-```
-
-### 1. Download and install KSOPS
-
-Make KSOPS available to your shell's PATH
-
-```bash
-source <(curl -s https://raw.githubusercontent.com/viaduct-ai/kustomize-sops/master/scripts/install-ksops-archive.sh)
-```
-
-### 2. Import Test PGP Keys
-
-To simplify local development and testing, we use PGP test keys. To import the keys, run the following command from the repository's root directory:
-
-```bash
-make import-test-keys
-```
-
-If you are following this tutorial, be sure to run this before the following steps. The PGP keys will also be imported when you run `make test`
-
-See [SOPS](https://github.com/mozilla/sops) for details.
-
-### 3. Configure SOPS via .sops.yaml
-
-For this example and testing, `KSOPS` relies on the `SOPS` creation rules defined in `.sops.yaml`. To make encrypted secrets more readable, we suggest using the following encryption regex to only encrypt `data` and `stringData` values. This leaves non-sensitive fields, like the secret's name, unencrypted and human readable.
-
-**Note:** You only have to modify `.sops.yaml` if you want to use your key management service in this example instead of the default PGP key imported in the previous step.
-
-```yaml
-creation_rules:
-  - unencrypted_regex: "^(apiVersion|metadata|kind|type)$"
-    # Specify kms/pgp/etc encryption key
-    # This tutorial uses a local PGP key for encryption.
-    # DO NOT USE IN PRODUCTION ENV
-    pgp: "FBC7B9E2A4F9289AC0C1D4843D16CEE4A27381B4"
-    # Optionally you can configure to use a providers key store
-    # kms: XXXXXX
-    # gcp_kms: XXXXXX
-```
-
-### 4. Create a Resource
-
-```bash
-# Create a local Kubernetes Secret
-cat <<EOF > secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: mysecret
-type: Opaque
-data:
-  username: YWRtaW4=
-  password: MWYyZDFlMmU2N2Rm
-EOF
-```
-
-### 5. Encrypt the Resources
-
-```bash
-# Encrypt with SOPS CLI
-# Specify SOPS configuration in .sops.yaml
-sops -e secret.yaml > secret.enc.yaml
-```
-
-### 6. Define KSOPS kustomize Generator
-
-```bash
-# Create a local Kubernetes Secret
-cat <<EOF > secret-generator.yaml
-apiVersion: viaduct.ai/v1
-kind: ksops
-metadata:
-  # Specify a name
-  name: example-secret-generator
-  annotations:
-    config.kubernetes.io/function: |
-        exec:
-          # if the binary is in your PATH, you can do
-          path: ksops
-          # otherwise, path should be relative to manifest files, like
-          # path: ../../../ksops
-files:
-  - ./secret.enc.yaml
-EOF
-```
-
-### 7. Create the kustomization.yaml
-
-[Read about kustomize plugins](https://kubectl.docs.kubernetes.io/guides/extending_kustomize/exec_plugins/)
-
-```bash
-cat <<EOF > kustomization.yaml
-generators:
-  - ./secret-generator.yaml
-EOF
-```
-
-### 8. Build with kustomize 🔑
-
-```bash
-# Build with kustomize to verify
-# In kustomize v2 and v3 the command is
-# kustomize build --enable_alpha_plugins .
-kustomize build --enable-alpha-plugins --enable-exec .
-```
-
-### Troubleshooting
-
-#### Sanity Checks
-
-- Validate `ksops` command is in your path
-
-```bash
-# Should output a path to KSOPS executable
-command -v ksops
-```
-
-- If you prefer to not install `ksops` to your path, make sure the path to the executable in the generator manifest is relative to the manifests files
-
-#### Check Existing Issues
-
-Someone might have already encountered your issue.
-
-https://github.com/viaduct-ai/kustomize-sops/issues
-
-## Generate secret directly from encrypted files
-
-`KSOPS` can also generate a Kubernetes Secret directly from encrypted files or dotenv files.
-
-#### Create a Kubernetes Secret from encrypted text-based file
-
-```bash
-cat <<EOF > secret-generator.yaml
-apiVersion: viaduct.ai/v1
-kind: ksops
-metadata:
-  name: example-secret-generator
-  annotations:
-    config.kubernetes.io/function: |
-        exec:
-          path: ksops
-secretFrom:
-- metadata:
-    name: secret-name
-    labels:
-      app: foo
-    annotations:
-      kustomize.config.k8s.io/needs-hash: "false"
-  type: Opaque
-  files:
-  - ./secret.enc.conf
-  - secret.yaml=./secret.enc.yaml
-EOF
-```
-
-#### Create a Kubernetes Secret from encrypted binary file
-
-```bash
-cat <<EOF > secret-generator.yaml
-apiVersion: viaduct.ai/v1
-kind: ksops
-metadata:
-  name: example-secret-generator
-  annotations:
-    config.kubernetes.io/function: |
-        exec:
-          path: ksops
-secretFrom:
-- metadata:
-    name: secret-name
-    labels:
-      app: foo
-    annotations:
-      kustomize.config.k8s.io/needs-hash: "false"
-  type: Opaque
-  binaryFiles:
-  - ./secret.enc
-  - secret=./secret.enc
-EOF
-```
-
-#### Create a Kubernetes Secret from an encrypted dotenv file
-
-```bash
-cat <<EOF > secret-generator.yaml
-apiVersion: viaduct.ai/v1
-kind: ksops
-metadata:
-  name: example-secret-generator
-  annotations:
-    config.kubernetes.io/function: |
-        exec:
-          path: ksops
-secretFrom:
-- metadata:
-    name: secret-name
-  envs:
-  - ./secret.enc.env
-EOF
-```
-
-## Configuration
-
-### Concurrent Decryption
-
-`KSOPS` decrypts files concurrently to improve performance when dealing with a large number of secrets. The maximum number of concurrent decryptions is controlled by the `KSOPS_CONCURRENCY_LIMIT` environment variable.
-
-```bash
-# Set the concurrency limit (default: 20)
-export KSOPS_CONCURRENCY_LIMIT=10
-kustomize build --enable-alpha-plugins --enable-exec .
-```
-
-If unset, the default concurrency limit is `20`. The value must be a positive integer.
-
-When using KSOPS with Argo CD, you can set this via the repo server environment variables:
+This is a drop-in replacement for `viaductoss/ksops:v4.5.1` in the usual
+init-container pattern:
 
 ```yaml
 repoServer:
-  env:
-    - name: KSOPS_CONCURRENCY_LIMIT
-      value: "10"
-```
-
-## Generator Options
-
-`KSOPS` supports kustomize annotation based generator options. At the time of writing, the supported annotations are:
-
-- `kustomize.config.k8s.io/needs-hash`
-- `kustomize.config.k8s.io/behavior`
-
-For information, read the [kustomize generator options documentation](https://github.com/kubernetes-sigs/kustomize/blob/master/examples/generatorOptions.md).
-
-### Encrypted Secret Overlays w/ Generator Options
-
-Sometimes there is a default secret as part of a project's base manifests, like the [base Argo CD secret](https://github.com/argoproj/argo-cd/blob/master/manifests/base/config/argocd-secret.yaml), which you want to `replace` in your overlay. Other times, you have parts of base secret that are common across different overlays but you want to partially update, or `merge`, changes specific to each overlay as well. You can achieve both of these goals by simply adding the following annotations to your encrypted secrets:
-
-#### Replace a Base Secret
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: argocd-secret
-  annotations:
-    # replace the base secret data/stringData values with these encrypted data/stringData values
-    kustomize.config.k8s.io/behavior: replace
-type: Opaque
-data:
-  # Encrypted data here
-stringData:
-  # Encrypted data here
-```
-
-#### Merge/Patch a Base Secret
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: argocd-secret
-  annotations:
-    # merge the base secret data/stringData values with these encrypted data/stringData values
-    kustomize.config.k8s.io/behavior: merge
-type: Opaque
-data:
-  # Encrypted data here
-stringData:
-  # Encrypted data here
-```
-
-## Development and Testing
-
-Before developing or testing `KSOPS`, ensure all external [requirements](#requirements) are properly installed.
-
-```bash
-# Setup development environment
-make setup
-```
-
-### Development
-
-`KSOPS` implements the [kustomize](https://github.com/kubernetes-sigs/kustomize/) plugin API in `ksops.go`.
-
-`KSOPS`'s logic is intentionally simple. Given a list of SOPS encrypted Kubernetes manifests, it iterates over each file and decrypts it via SOPS [decrypt](https://godoc.org/go.mozilla.org/sops/decrypt) library. `KSOPS` assumes nothing about the structure of the encrypted resource and relies on [kustomize](https://github.com/kubernetes-sigs/kustomize/) for manifest validation. `KSOPS` expects the encryption key to be accessible. This is important to consider when using `KSOPS` for CI/CD.
-
-### Testing
-
-Testing `KSOPS` requires:
-
-Everything is handled for you by `make test`. Just run it from the repo's root directory:
-
-```bash
-make test
-```
-
-## Legacy Exec Plugin
-
-If you are on an older version (`<=v3.x.x`) of `KSOPS` or want to use legacy exec style plugin, the then read the [Legacy README](./README-legacy.md) for instructions.
-
-## Argo CD Integration 🤖
-
-`KSOPS` becomes even more powerful when integrated with a CI/CD pipeline. By combining `KSOPS` with [Argo CD](https://github.com/argoproj/argo-cd/), you can manage Kubernetes secrets via the same Git Ops pattern you use to manage the rest of your kubernetes manifests. To integrate `KSOPS` and [Argo CD](https://github.com/argoproj/argo-cd/), you will need to update the Argo CD ConfigMap and create a [strategic merge patch](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-api-machinery/strategic-merge-patch.md) or a [custom Argo CD build](https://argoproj.github.io/argo-cd/operator-manual/custom_tools/#byoi-build-your-own-image). As an alternative you can also use the [Argo CD Helm Chart](https://github.com/argoproj/argo-helm/tree/master/charts/argo-cd) with [custom values](#argo-cd-helm-chart-with-custom-tooling). Don't forget to inject any necessary credentials (i.e AWS credentials) when deploying the [Argo CD](https://github.com/argoproj/argo-cd/) + `KSOPS` build!
-
-[KSOPS Docker Image](https://hub.docker.com/r/viaductoss/ksops)
-
-[KSOPS Quay.io Image](https://quay.io/repository/viaductoss/ksops)
-
-### Enable Kustomize Plugins via Argo CD ConfigMap
-
-As of now to allow [Argo CD](https://github.com/argoproj/argo-cd/) to use [kustomize](https://github.com/kubernetes-sigs/kustomize/) plugins you must use the `--enable-alpha-plugins` and `--enable-exec` flags. This is configured by the `kustomize.buildOptions` setting in the [Argo CD](https://github.com/argoproj/argo-cd/) ConfigMap
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: argocd-cm
-  labels:
-    app.kubernetes.io/name: argocd-cm
-    app.kubernetes.io/part-of: argocd
-data:
-  kustomize.buildOptions: "--enable-alpha-plugins --enable-exec"
-```
-
-### KSOPS Repo Sever Patch
-
-The simplest way to integrate `KSOPS` with [Argo CD](https://github.com/argoproj/argo-cd/) is with a [strategic merge patch](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-api-machinery/strategic-merge-patch.md) on the Argo CD repo server deployment. The patch below uses an init container to build `KSOPS` and volume mount to inject the `KSOPS` plugin and, optionally, override the [kustomize](https://github.com/kubernetes-sigs/kustomize/) executable.
-
-```yaml
-# argo-cd-repo-server-ksops-patch.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: argocd-repo-server
-spec:
-  template:
-    spec:
-      # 1. Define an emptyDir volume which will hold the custom binaries
-      volumes:
-        - name: custom-tools
-          emptyDir: {}
-      # 2. Use an init container to copy custom binaries into the emptyDir
-      initContainers:
-        - name: install-ksops
-          image: viaductoss/ksops:v4.5.1
-          command: ["/usr/local/bin/ksops", "install", "--with-kustomize", "/custom-tools"]
-          volumeMounts:
-            - mountPath: /custom-tools
-              name: custom-tools
-      # 3. Volume mount the custom binary to the bin directory (overriding the existing version)
-      containers:
-        - name: argocd-repo-server
-          volumeMounts:
-            - mountPath: /usr/local/bin/kustomize
-              name: custom-tools
-              subPath: kustomize
-            - mountPath: /usr/local/bin/ksops
-              name: custom-tools
-              subPath: ksops
-        ## If you use AWS or GCP KMS, don't forget to include the necessary credentials to decrypt the secrets!
-        # env:
-        #  - name: AWS_ACCESS_KEY_ID
-        #    valueFrom:
-        #      secretKeyRef:
-        #        name: argocd-aws-credentials
-        #        key: accesskey
-        #  - name: AWS_SECRET_ACCESS_KEY
-        #    valueFrom:
-        #      secretKeyRef:
-        #        name: argocd-aws-credentials
-        #        key: secretkey
-```
-
-### ArgoCD/GitOps Operator w/ KSOPS/agekey in OKD4/OCP4
-
-1. Install the [Age tool](https://github.com/FiloSottile/age#installation) and run the below command to generate a new key:
-
-```bash
-age-keygen -o age.agekey
-```
-
-2. Create a secret in the namespace where your ArgoCD-instance is running:
-
-```bash
-cat age.agekey | oc create secret generic sops-age --namespace=openshift-operators \
---from-file=keys.txt=/dev/stdin
-```
-
-3. Add the following in your ArgoCD-CRD:
-
-`kind: ArgoCD`:
-
-```yaml
-  kustomizeBuildOptions: --enable-alpha-plugins --enable-exec
-  repo:
-    env:
-    - name: XDG_CONFIG_HOME
-      value: /.config
-    - name: SOPS_AGE_KEY_FILE
-      value: /.config/sops/age/keys.txt
-    initContainers:
-    - command:
-      - /usr/local/bin/ksops
-      - install
-      - --with-kustomize
-      - /custom-tools
-      image: viaductoss/ksops:v4.5.1
-      name: install-ksops
-      volumeMounts:
-      - mountPath: /custom-tools
-        name: custom-tools
-    volumeMounts:
-    - mountPath: /usr/local/bin/kustomize
-      name: custom-tools
-      subPath: kustomize
-    - mountPath: /usr/local/bin/ksops
-      name: custom-tools
-      subPath: ksops
-    - mountPath: /.config/sops/age
-      name: sops-age
-    volumes:
-    - emptyDir: {}
-      name: custom-tools
-    - name: sops-age
-      secret:
-
-```
-
-4. Encrypt your secrets with [sops](https://github.com/getsops/sops/releases) and commit it to your repository: (all changes to the secret after encryption will give data integrity errors, so re-encrypt if you want to add stuff!)
-
-```bash
-sops --encrypt --in-place secret.sops.yaml
-```
-
-5. Point to your encrypted secret(s):
-
-```yaml
-apiVersion: viaduct.ai/v1
-kind: ksops
-metadata:
-  # Specify a name
-  name: example-secret-generator
-  annotations:
-    config.kubernetes.io/function: |
-      exec:
-        path: ksops
-files:
-  - secret.sops.yaml
-```
-
-6. Test locally if your setup works(`sops`/`ksops`/`kustomize` binaries are required):
-
-```bash
-kustomize build --enable-alpha-plugins --enable-exec| oc diff -f -
-```
-
-```bash
-cp age.agekey ~/.config/sops/age/keys.txt
-sops --decrypt secret.sops.yaml
-```
-
-7. Test to rollout your encrypted Secret w/ ArgoCD
-
-### Custom Argo CD w/ KSOPS Dockerfile
-
-Alternatively, for more control and faster pod start times you can build a custom docker image.
-
-```Dockerfile
-ARG ARGO_CD_VERSION="v2.6.7"
-# https://github.com/argoproj/argo-cd/blob/master/Dockerfile
-ARG KSOPS_VERSION="v4.5.1"
-
-#--------------------------------------------#
-#--------Build KSOPS and Kustomize-----------#
-#--------------------------------------------#
-
-FROM viaductoss/ksops:$KSOPS_VERSION as ksops-builder
-
-#--------------------------------------------#
-#--------Build Custom Argo Image-------------#
-#--------------------------------------------#
-
-FROM argoproj/argocd:$ARGO_CD_VERSION
-
-# Switch to root for the ability to perform install
-USER root
-
-ARG PKG_NAME=ksops
-
-# Override the default kustomize executable with the Go built version
-COPY --from=ksops-builder /usr/local/bin/kustomize /usr/local/bin/kustomize
-
-# Add ksops executable to path
-COPY --from=ksops-builder /usr/local/bin/ksops /usr/local/bin/ksops
-
-# Switch back to non-root user
-USER argocd
-```
-
-### Argo CD Helm Chart with Custom Tooling
-
-We can setup `KSOPS` custom tooling in the [Argo CD Chart](https://github.com/argoproj/argo-helm/tree/master/charts/argo-cd) with the following values:
-
-```yaml
-# Enable Kustomize Alpha Plugins via Argo CD ConfigMap, required for ksops
-configs:
-  cm:
-    kustomize.buildOptions: "--enable-alpha-plugins --enable-exec"
-
-repoServer:
-  # Use init containers to configure custom tooling
-  # https://argoproj.github.io/argo-cd/operator-manual/custom_tools/
   volumes:
-    - name: custom-tools
+    - name: ksops-install
       emptyDir: {}
-
+  volumeMounts:
+    - name: ksops-install
+      mountPath: /etc/kustomize/plugin/viaduct.ai/v1/ksops/ksops
+      subPath: ksops
   initContainers:
     - name: install-ksops
-      image: viaductoss/ksops:v4.5.1
-      command: ["/usr/local/bin/ksops", "install", "--with-kustomize", "/custom-tools"]
+      image: ghcr.io/howell-technology/ksops:v4.5.1-ht.1@sha256:<digest>
+      command: ["/usr/local/bin/ksops", "install", "/ksops-install"]
       volumeMounts:
-        - mountPath: /custom-tools
-          name: custom-tools
-  volumeMounts:
-    - mountPath: /usr/local/bin/kustomize
-      name: custom-tools
-      subPath: kustomize
-    - mountPath: /usr/local/bin/ksops
-      name: custom-tools
-      subPath: ksops
+        - name: ksops-install
+          mountPath: /ksops-install
 ```
+
+## Build and CI
+
+`.github/workflows/build.yml` runs on every push and pull request:
+
+1. **test:** installs upstream's pinned kustomize, builds ksops into a
+   kustomize plugin home (the same layout as Argo CD), then runs upstream's
+   full test suite. It then runs `govulncheck`, and any reachable
+   vulnerability fails the build.
+2. **image:** only on `main`, `v*` tags or a manual run, never on a pull
+   request. Builds the multi-arch image and pushes it to GHCR.
+
+Building locally:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t ksops:dev .
+# or just the binary
+CGO_ENABLED=0 go build -trimpath -o ksops .
+```
+
+### Security model
+
+This repository is public, but whoever can push here can ship code that runs
+next to a SOPS key. So:
+
+- **GitHub-hosted runners only.** Never self-hosted ones, because a pull request
+  from a fork would run its code on them.
+- **`pull_request`, never `pull_request_target`.** Fork pull requests get a
+  read-only token and no secrets. Workflows from outside contributors need
+  approval before they run.
+- **Images are pushed only from `main` and from tags.** `main` is protected.
+- **Every action is pinned to a commit SHA** and every base image to a digest.
+  Dependabot proposes updates as pull requests.
+- **Consumers pin by digest.** A pushed tag changes nothing in a cluster
+  until someone reviews and changes the pin.
+
+## Updating
+
+- **Dependency or base-image bump:** merge the Dependabot pull request once CI
+  passes, then tag `v4.5.1-ht.<N+1>`. CI publishes the image, and the
+  digest shows in the run summary. Then update the digest pin where the image
+  is used.
+- **New upstream release:** if upstream ships a release with current
+  dependencies, switch back to the official `viaductoss/ksops` image and
+  archive this repo. Otherwise, merge the new upstream tag into `main`,
+  reapply the dependency updates, and tag `v<upstream>-ht.1`.
+
+## License
+
+KSOPS is licensed under the Apache License 2.0 (see `LICENSE`), and so is this
+rebuild. Copyright in the KSOPS source belongs to its upstream authors.

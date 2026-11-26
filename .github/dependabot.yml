@@ -1,31 +1,22 @@
 version: 2
 updates:
-- package-ecosystem: gomod
-  directory: "/"
-  schedule:
-    interval: daily
-  open-pull-requests-limit: 10
-  reviewers:
-  - devstein
-  assignees:
-  - devstein
-  labels:
-  - dependencies
-  - please code review
-  ignore:
-  - dependency-name: sigs.k8s.io/kustomize/api
-    versions:
-    - 0.8.1
-    - 0.8.4
-- package-ecosystem: github-actions
-  directory: /
-  schedule:
-    interval: weekly
-  open-pull-requests-limit: 10
-  reviewers:
-  - devstein
-  assignees:
-  - devstein
-  labels:
-  - dependencies
-  - please code review
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ['*']
+    # sops minor versions change how files are decrypted and verified;
+    # take them deliberately, not through Dependabot.
+    ignore:
+      - dependency-name: github.com/getsops/sops/v3
+        update-types: [version-update:semver-minor, version-update:semver-major]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

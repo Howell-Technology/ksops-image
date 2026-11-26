@@ -1,56 +1,33 @@
-ARG GO_VERSION="1.25.0"
+# syntax=docker/dockerfile:1
+#
+# Howell Technology rebuild of KSOPS (viaduct-ai/kustomize-sops). This file
+# replaces upstream's Dockerfile, which is kept as Dockerfile.upstream.
+# Changes from upstream:
+#   - newer Go toolchain and Go dependencies (see README.md)
+#   - only the ksops binary: no kustomize, no git, no shell
+#   - static distroless base, every base image pinned by digest
+#
+# The binary sits at /usr/local/bin/ksops, as in upstream's image, so
+# `ksops install <dir>` init containers work unchanged.
 
-#--------------------------------------------#
-#--------Build KSOPS and Kustomize-----------#
-#--------------------------------------------#
-FROM --platform=${BUILDPLATFORM} golang:${GO_VERSION} AS base
-RUN apt update && apt install git make -y
-COPY go.* .
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY . .
+ARG GO_IMAGE=golang:1.26.11-bookworm@sha256:ea47ee45f1284d60f9cc09cb2c3bb4f508c256b640bd8bb30342ff13d1adcb52
+ARG RUNTIME_IMAGE=gcr.io/distroless/static:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.6.1@sha256:923441d7c25f1e2eb5789f82d987693c47b8ed987c4ab3b075d6ed2b5d6779a3 AS xx
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
+WORKDIR /src
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
+COPY *.go ./
+ARG TARGETOS TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-w -s" -o /out/ksops .
 
-# Stage 1: Build KSOPS and Kustomize
-FROM --platform=${BUILDPLATFORM} base AS builder
-ARG TARGETPLATFORM \
-    TARGETARCH \
-    PKG_NAME=ksops
-COPY --link --from=xx / /
-
-# Match Argo CD's build
-ENV GO111MODULE=on \
-    CGO_ENABLED=0
-
-# Define kustomize config location
-ENV HOME=/root
-ENV XDG_CONFIG_HOME=$HOME/.config
-
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    xx-go --wrap && \
-    make prereqs && \
-    xx-verify /go/bin/kustomize
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    xx-go --wrap && \
-    make install && \
-    xx-verify --static /go/bin/ksops
-
-# # Stage 2: Final image
-FROM --platform=${BUILDPLATFORM} gcr.io/distroless/base AS runtime
-LABEL org.opencontainers.image.source="https://github.com/viaduct-ai/kustomize-sops"
-
+FROM ${RUNTIME_IMAGE}
+LABEL org.opencontainers.image.source="https://github.com/Howell-Technology/ksops-image" \
+      org.opencontainers.image.description="KSOPS v4.5.1 rebuilt with patched Go dependencies (unofficial)" \
+      org.opencontainers.image.licenses="Apache-2.0"
+COPY --from=build --chown=root:root --chmod=755 /out/ksops /usr/local/bin/ksops
+COPY --from=build --chown=root:root --chmod=755 /out/ksops /usr/local/bin/kustomize-sops
 USER nonroot
-
-WORKDIR /usr/local/bin
-
-CMD ["kustomize", "version"]
-
-COPY --link --from=builder --chown=root:root --chmod=755 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --link --from=base --chown=root:root --chmod=755 /usr/bin/git /usr/bin/git
-
-# Copy only necessary files from the builder stage
-COPY --link --from=builder --chown=root:root --chmod=755 /go/bin/ksops /usr/local/bin/ksops
-COPY --link --from=builder --chown=root:root --chmod=755 /go/bin/ksops /usr/local/bin/kustomize-sops
-COPY --link --from=builder --chown=root:root --chmod=755 /go/bin/kustomize /usr/local/bin/kustomize
+ENTRYPOINT ["/usr/local/bin/ksops"]
