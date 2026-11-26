@@ -29,5 +29,6 @@ LABEL org.opencontainers.image.source="https://github.com/Howell-Technology/ksop
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build --chown=root:root --chmod=755 /out/ksops /usr/local/bin/ksops
 COPY --from=build --chown=root:root --chmod=755 /out/ksops /usr/local/bin/kustomize-sops
-USER nonroot
+# Numeric, so runAsNonRoot can verify it (65532 is distroless's nonroot).
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/ksops"]
