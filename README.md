@@ -36,6 +36,7 @@ No ksops source code is changed. Only the build inputs are:
 | `google.golang.org/grpc` | 1.79.3 | 1.85.0 |
 | `go.opentelemetry.io/otel` | 1.45.0 | 1.47.0 |
 | `go.mongodb.org/mongo-driver` | 1.13.1 | 1.17.7 |
+| `github.com/ProtonMail/go-crypto` | 1.3.0 | 1.5.2 |
 | `github.com/getsops/sops/v3` | 3.12.2 | **3.12.2 (unchanged, on purpose)** |
 | govulncheck | 12+ reachable vulnerabilities | none |
 
